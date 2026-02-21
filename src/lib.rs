@@ -32,5 +32,5 @@ pub mod prng;
 
 // 公开导出主要 API
 pub use hilbert::{hilbert_index, hilbert_inverse};
-pub use image_ops::{deobfuscate, next_power_of_two, obfuscate, save_image};
+pub use image_ops::{deobfuscate, next_power_of_two, obfuscate, read_seed_from_image, save_image};
 pub use prng::SplitMix64;

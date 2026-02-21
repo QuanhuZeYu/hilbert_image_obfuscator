@@ -59,6 +59,7 @@ pub fn next_power_of_two(mut v: u32) -> u32 {
 ///
 /// 将图像的像素顺序打乱，使原始图像变得不可辨认。
 /// 使用种子（seed）来控制随机打乱的顺序，相同的种子产生相同的结果。
+/// 种子会被写入图片右下角以便解混淆时自动读取。
 ///
 /// # 算法步骤
 ///
@@ -66,6 +67,7 @@ pub fn next_power_of_two(mut v: u32) -> u32 {
 /// 2. **生成排列**：使用 SplitMix64 PRNG 生成确定性的索引排列
 /// 3. **像素重排**：根据排列重新组织像素位置
 /// 4. **图像重建**：将一维像素向量重新转换为二维图像
+/// 5. **写入种子**：将种子信息写入图片右下角
 ///
 /// # 参数说明
 ///
@@ -75,7 +77,7 @@ pub fn next_power_of_two(mut v: u32) -> u32 {
 /// # 返回值
 ///
 /// 返回一个元组 (RgbaImage, u32)：
-/// - RgbaImage: 混淆后的图像
+/// - RgbaImage: 混淆后的图像（右下角包含种子信息）
 /// - u32: 图像的边长（取宽度和高度的最大值，用于 Hilbert 曲线计算）
 ///
 /// # 重要说明
@@ -83,6 +85,7 @@ pub fn next_power_of_two(mut v: u32) -> u32 {
 /// - 混淆后的图像保留原始图像的尺寸
 /// - 混淆操作是可逆的，使用相同的 seed 调用 deobfuscate 可以恢复原始图像
 /// - 不同的 seed 会产生完全不同的混淆结果
+/// - 种子信息以特殊像素模式嵌入图片右下角
 pub fn obfuscate(orig: &RgbaImage, seed: u64) -> (RgbaImage, u32) {
     let (w, h) = orig.dimensions();
     let n = (w * h) as usize;
@@ -111,48 +114,139 @@ pub fn obfuscate(orig: &RgbaImage, seed: u64) -> (RgbaImage, u32) {
         }
     }
 
+    // 将种子写入图片右下角（从右往左写）
+    // 使用特殊标记：前3个像素为红色通道的特殊值标记
+    let seed_bytes = seed.to_le_bytes();
+    let marker = [0xDE, 0xAD, 0xBE, 0xEF]; // 特殊标记
+
+    // 从右下角开始写入：标记(4字节) + 种子(8字节) = 12像素
+    let mut px = w as i32 - 1;
+    let py = h as i32 - 1;
+
+    // 写入标记
+    for i in 0..4 {
+        if px >= 0 {
+            out.put_pixel(px as u32, py as u32, Rgba([marker[i], 0, 0, 255]));
+            px -= 1;
+        }
+    }
+
+    // 写入种子字节
+    for byte in seed_bytes {
+        if px >= 0 {
+            out.put_pixel(px as u32, py as u32, Rgba([byte, 0, 0, 255]));
+            px -= 1;
+        }
+    }
+
     // Return side = max dimension for compatibility
     (out, w.max(h))
+}
+
+/// 从混淆后的图片右下角读取种子
+///
+/// 读取图片右下角嵌入的种子信息。
+///
+/// # 参数说明
+///
+/// - `img`: 混淆后的图像引用
+///
+/// # 返回值
+///
+/// - `Some(u64)`: 成功读取到种子
+/// - `None`: 未找到有效的种子标记
+pub fn read_seed_from_image(img: &RgbaImage) -> Option<u64> {
+    let w = img.width();
+    let h = img.height();
+    let marker = [0xDE, 0xAD, 0xBE, 0xEF];
+
+    // 从右下角开始读取
+    let mut px = w as i32 - 1;
+    let py = h as i32 - 1;
+
+    // 读取并验证标记
+    let mut read_marker = [0u8; 4];
+    for i in 0..4 {
+        if px < 0 {
+            return None;
+        }
+        let pixel = img.get_pixel(px as u32, py as u32);
+        read_marker[i] = pixel[0];
+        px -= 1;
+    }
+
+    if read_marker != marker {
+        return None;
+    }
+
+    // 读取种子字节
+    let mut seed_bytes = [0u8; 8];
+    for i in 0..8 {
+        if px < 0 {
+            return None;
+        }
+        let pixel = img.get_pixel(px as u32, py as u32);
+        seed_bytes[i] = pixel[0];
+        px -= 1;
+    }
+
+    Some(u64::from_le_bytes(seed_bytes))
 }
 
 /// 对混淆后的图像进行解混淆处理
 ///
 /// 这是 obfuscate 函数的逆操作，使用相同的种子恢复原始图像。
+/// 如果 seed 为 None，将自动从图片右下角读取种子。
 ///
 /// # 算法步骤
 ///
-/// 1. **像素展平**：将混淆图像的所有像素提取为一维向量
-/// 2. **生成排列**：使用相同的 seed 生成与混淆时相同的排列
-/// 3. **计算逆排列**：计算排列的逆，用于反向映射
-/// 4. **逆排列应用**：将像素按照逆排列重排，恢复原始顺序
-/// 5. **图像重建**：将一维像素向量重新转换为二维图像
+/// 1. **读取种子**：如果未指定种子，则从图片右下角读取
+/// 2. **像素展平**：将混淆图像的所有像素提取为一维向量
+/// 3. **生成排列**：使用相同的 seed 生成与混淆时相同的排列
+/// 4. **计算逆排列**：计算排列的逆，用于反向映射
+/// 5. **逆排列应用**：将像素按照逆排列重排，恢复原始顺序
+/// 6. **图像重建**：将一维像素向量重新转换为二维图像
 ///
 /// # 参数说明
 ///
 /// - `obf`: 混淆后的图像引用
-/// - `seed`: 混淆时使用的种子（必须与混淆时相同才能正确恢复）
+/// - `seed`: 混淆时使用的种子，如果为 None 则自动从图片读取
 /// - `orig_w`: 原始图像的宽度
 /// - `orig_h`: 原始图像的高度
 /// - `_side`: 正方形边长（用于 Hilbert 曲线，目前保留兼容）
 ///
 /// # 返回值
 ///
-/// 返回一个元组 (RgbaImage, u32)：
+/// 返回一个元组 (RgbaImage, u32, Option<u64>)：
 /// - RgbaImage: 解混淆后的原始图像
 /// - u32: 图像边长
+/// - Option<u64>: 实际使用的种子（用于显示）
 ///
 /// # 重要说明
 ///
+/// - 如果未指定种子，会自动从图片右下角读取
 /// - 必须使用与混淆时相同的 seed 才能正确恢复图像
 /// - 如果图像尺寸不匹配，结果可能不正确
 /// - 解混淆后，图像将完全恢复到原始状态
 pub fn deobfuscate(
     obf: &RgbaImage,
-    seed: u64,
+    seed: Option<u64>,
     orig_w: u32,
     orig_h: u32,
     _side: u32,
-) -> (RgbaImage, u32) {
+) -> (RgbaImage, u32, Option<u64>) {
+    // 如果未指定种子，尝试从图片读取
+    let actual_seed = match seed {
+        Some(s) => s,
+        None => match read_seed_from_image(obf) {
+            Some(s) => s,
+            None => {
+                // 无法读取种子，返回原始图像
+                return (obf.clone(), obf.width().max(obf.height()), None);
+            }
+        },
+    };
+
     let w = obf.width();
     let h = obf.height();
     let n = (w * h) as usize;
@@ -166,7 +260,7 @@ pub fn deobfuscate(
     }
 
     // Generate same permutation
-    let perm = shuffle_indices(n, seed);
+    let perm = shuffle_indices(n, actual_seed);
 
     // Compute inverse permutation
     let mut inv_perm = vec![0usize; n];
@@ -191,8 +285,10 @@ pub fn deobfuscate(
         }
     }
 
-    (out, w.max(h))
+    (out, w.max(h), Some(actual_seed))
 }
+
+/// 将图像保存到磁盘
 
 /// 将图像保存到磁盘
 ///
@@ -287,7 +383,7 @@ mod tests {
         assert_eq!(obf.height(), img.height());
 
         // Deobfuscate
-        let (deobf, _side) = deobfuscate(&obf, seed, img.width(), img.height(), side);
+        let (deobf, _side, _) = deobfuscate(&obf, Some(seed), img.width(), img.height(), side);
 
         // Verify dimensions
         assert_eq!(deobf.width(), img.width());

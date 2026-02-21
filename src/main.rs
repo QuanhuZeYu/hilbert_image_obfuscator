@@ -16,7 +16,9 @@
 //! - 中央区域：图像预览区（可缩放查看三张图像）
 //! - 顶部：应用标题
 
-use hilbert_image_obfuscator::{deobfuscate, next_power_of_two, obfuscate, save_image};
+use hilbert_image_obfuscator::{
+    deobfuscate, next_power_of_two, obfuscate, read_seed_from_image, save_image,
+};
 use image::RgbaImage;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -61,6 +63,10 @@ struct AppState {
     deobf_zoom: f32,
     /// 当前聚焦的图像（用于滚轮缩放）
     focused_zoom: FocusedImage,
+    /// 是否手动指定解混淆种子
+    use_manual_seed: bool,
+    /// 从图片中读取的种子
+    read_seed: Option<u64>,
     /// egui 纹理缓存，用于加速图像显示
     texture_cache: RefCell<HashMap<String, (u32, u32, egui::ColorImage)>>,
 }
@@ -80,6 +86,8 @@ impl Default for AppState {
             obf_zoom: 1.0,
             deobf_zoom: 1.0,
             focused_zoom: FocusedImage::None,
+            use_manual_seed: false,
+            read_seed: None,
             texture_cache: RefCell::new(HashMap::new()),
         }
     }
@@ -100,6 +108,8 @@ impl Clone for AppState {
             obf_zoom: self.obf_zoom,
             deobf_zoom: self.deobf_zoom,
             focused_zoom: self.focused_zoom,
+            use_manual_seed: self.use_manual_seed,
+            read_seed: self.read_seed,
             texture_cache: RefCell::new(HashMap::new()),
         }
     }
@@ -245,6 +255,12 @@ impl eframe::App for AppState {
                         let w = rgba.width();
                         let h = rgba.height();
                         let side = w.max(h);
+                        // 先读取种子（需要借用rgba）
+                        self.read_seed = read_seed_from_image(&rgba);
+                        if let Some(rs) = self.read_seed {
+                            self.seed = rs;
+                        }
+                        // 再保存图像
                         self.obf = Some(rgba);
                         self.side = side;
                         self.orig_w = w;
@@ -262,6 +278,13 @@ impl eframe::App for AppState {
                 self.seed = v;
             }
             ui.separator();
+            ui.checkbox(&mut self.use_manual_seed, "手动指定解混淆种子");
+            if let Some(rs) = self.read_seed {
+                if !self.use_manual_seed {
+                    ui.label(format!("图片中的种子: {}", rs));
+                }
+            }
+            ui.separator();
             if ui.button("混淆").clicked() {
                 if let Some(ref orig) = self.orig {
                     let (out, side) = obfuscate(orig, self.seed);
@@ -272,9 +295,17 @@ impl eframe::App for AppState {
             }
             if ui.button("解混淆").clicked() {
                 if let Some(ref obf) = self.obf {
-                    let (out, _side) =
-                        deobfuscate(obf, self.seed, self.orig_w, self.orig_h, self.side);
+                    let seed_param = if self.use_manual_seed {
+                        Some(self.seed)
+                    } else {
+                        None
+                    };
+                    let (out, _side, used_seed) =
+                        deobfuscate(obf, seed_param, self.orig_w, self.orig_h, self.side);
                     self.deobf = Some(out);
+                    if let Some(used) = used_seed {
+                        self.read_seed = Some(used);
+                    }
                     self.texture_cache.borrow_mut().clear();
                 }
             }

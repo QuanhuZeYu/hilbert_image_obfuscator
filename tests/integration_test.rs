@@ -28,7 +28,7 @@ fn test_obfuscate_with_real_image() {
     println!("Side used: {}", side);
 
     // Deobfuscate
-    let (deobf, _side) = deobfuscate(&obf, seed, w, h, side);
+    let (deobf, _side, _) = deobfuscate(&obf, Some(seed), w, h, side);
     println!("Deobfuscated image: {}x{}", deobf.width(), deobf.height());
 
     // Verify dimensions - obfuscated/deobfuscated have original dimensions
