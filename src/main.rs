@@ -213,7 +213,7 @@ impl eframe::App for AppState {
         }
 
         TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            ui.label("Hilbert 曲线 + 非黄金分割的混淆算法");
+            ui.label("Hilbert 曲线 + SplitMix64 的混淆算法");
         });
 
         SidePanel::left("left").show(ctx, |ui| {
