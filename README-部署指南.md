@@ -70,7 +70,7 @@ cargo --version
 ### 方法一：使用 Git Bash
 
 ```bash
-git clone https://github.com/你的GitHub用户名/混淆解混淆图片.git
+git clone https://github.com/QuanhuZeYu/hilbert_image_obfuscator.git
 cd 混淆解混淆图片
 ```
 
